@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
 import { state, sendMove, sendChat, sendMount, sendDismount } from '../net.js'
 import { charById, drawCharacter, roundRect } from '../characters.js'
 import { VEHICLES, drawVehicle } from '../vehicles.js'
@@ -18,6 +18,46 @@ const typing = ref(false)
 const count = computed(() => Object.keys(state.players).length)
 const recentChat = computed(() => state.chatLog.slice(-8))
 const vehicleHint = ref('')
+
+// --- touch / mobile ---
+const isTouch = ref(false)
+const mobileChatOpen = ref(false)
+const joyBaseRef = ref()
+const joyThumbRef = ref()
+const joy = { active: false, x: 0, y: 0, r: 45 }
+
+const vehBtnLabel = computed(() => {
+  const me = state.players[state.myId]
+  return me && me.vehicle ? '내리기' : '🛴 타기'
+})
+
+function joyStart(e) {
+  joy.active = true
+  joyMove(e)
+}
+function joyMove(e) {
+  if (!joy.active || !joyBaseRef.value) return
+  const t = e.changedTouches ? e.changedTouches[0] : e
+  const rect = joyBaseRef.value.getBoundingClientRect()
+  const cx = rect.left + rect.width / 2
+  const cy = rect.top + rect.height / 2
+  let dx = t.clientX - cx
+  let dy = t.clientY - cy
+  const dist = Math.hypot(dx, dy)
+  if (dist > joy.r) { dx = (dx / dist) * joy.r; dy = (dy / dist) * joy.r }
+  joy.x = dx / joy.r
+  joy.y = dy / joy.r
+  if (joyThumbRef.value) joyThumbRef.value.style.transform = `translate(${dx}px, ${dy}px)`
+}
+function joyEnd() {
+  joy.active = false
+  joy.x = 0; joy.y = 0
+  if (joyThumbRef.value) joyThumbRef.value.style.transform = 'translate(0,0)'
+}
+function openMobileChat() {
+  mobileChatOpen.value = !mobileChatOpen.value
+  if (mobileChatOpen.value) nextTick(() => inputRef.value && inputRef.value.focus())
+}
 
 const MOUNT_RANGE = 70
 function nearestVehicleId(me) {
@@ -82,7 +122,7 @@ function focusChat() { inputRef.value && inputRef.value.focus() }
 function sendChatMsg() {
   const t = chatInput.value.trim()
   if (t) { sendChat(t); chatInput.value = '' }
-  inputRef.value && inputRef.value.blur()
+  if (!isTouch.value) inputRef.value && inputRef.value.blur()
 }
 
 function resize() {
@@ -92,6 +132,7 @@ function resize() {
 }
 
 onMounted(() => {
+  isTouch.value = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window
   resize()
   window.addEventListener('resize', resize)
   window.addEventListener('keydown', kd)
@@ -114,12 +155,14 @@ function loop() {
     if (keys['arrowright'] || keys['d']) dx += 1
     if (keys['arrowup'] || keys['w']) dy -= 1
     if (keys['arrowdown'] || keys['s']) dy += 1
+    if (joy.active) { dx += joy.x; dy += joy.y }
     const speed = me.vehicle ? VEHICLES[me.vehicle].speed : SPEED
-    if (dx || dy) {
-      const len = Math.hypot(dx, dy)
-      me.x = Math.max(40, Math.min(WORLD_W - 40, me.x + (dx / len) * speed))
-      me.y = Math.max(40, Math.min(WORLD_H - 40, me.y + (dy / len) * speed))
-      if (dx) me.dir = dx > 0 ? 1 : -1
+    const mag = Math.hypot(dx, dy)
+    if (mag > 0.18) {
+      const m = Math.min(1, mag) // analog: 살짝 기울이면 천천히
+      me.x = Math.max(40, Math.min(WORLD_W - 40, me.x + (dx / mag) * speed * m))
+      me.y = Math.max(40, Math.min(WORLD_H - 40, me.y + (dy / mag) * speed * m))
+      if (Math.abs(dx) > 0.05) me.dir = dx > 0 ? 1 : -1
       me.walking = true
       const now = performance.now()
       if (now - lastSend > 60) { sendMove(me.x, me.y, me.dir); lastSend = now }
@@ -310,18 +353,18 @@ function drawBubble(ctx, cx, bottomY, text) {
       <span class="count">● {{ count }}명 접속</span>
     </div>
 
-    <div class="chatlog">
+    <div class="chatlog" :class="{ touch: isTouch }">
       <div v-for="(m, i) in recentChat" :key="i" class="line">
         <b>{{ m.nick }}</b> {{ m.text }}
       </div>
     </div>
 
-    <div class="chatbar">
+    <div class="chatbar" v-show="!isTouch || mobileChatOpen" :class="{ mobile: isTouch }">
       <input
         ref="inputRef"
         v-model="chatInput"
         maxlength="200"
-        placeholder="Enter 키를 눌러 채팅하기..."
+        :placeholder="isTouch ? '메시지 입력...' : 'Enter 키를 눌러 채팅하기...'"
         @focus="typing = true"
         @blur="typing = false"
         @keydown.enter="sendChatMsg"
@@ -329,9 +372,26 @@ function drawBubble(ctx, cx, bottomY, text) {
       <button @click="sendChatMsg">전송</button>
     </div>
 
-    <div v-if="vehicleHint" class="vhint">{{ vehicleHint }}</div>
+    <!-- 모바일 터치 컨트롤 -->
+    <template v-if="isTouch">
+      <div
+        class="joy"
+        ref="joyBaseRef"
+        @touchstart.prevent="joyStart"
+        @touchmove.prevent="joyMove"
+        @touchend.prevent="joyEnd"
+        @touchcancel.prevent="joyEnd"
+      >
+        <div class="joy-thumb" ref="joyThumbRef"></div>
+      </div>
+      <div class="tbtns">
+        <button class="tbtn chat" @click="openMobileChat">💬</button>
+        <button class="tbtn veh" @click="toggleVehicle">{{ vehBtnLabel }}</button>
+      </div>
+    </template>
 
-    <div class="help">방향키 / WASD 이동 · Enter 채팅 · F 탈것</div>
+    <div v-if="vehicleHint && !isTouch" class="vhint">{{ vehicleHint }}</div>
+    <div class="help" v-if="!isTouch">방향키 / WASD 이동 · Enter 채팅 · F 탈것</div>
   </div>
 </template>
 
@@ -341,6 +401,11 @@ function drawBubble(ctx, cx, bottomY, text) {
   inset: 0;
   overflow: hidden;
   background: #9ed36a;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 .world {
   display: block;
@@ -437,5 +502,76 @@ function drawBubble(ctx, cx, bottomY, text) {
   font-size: 12px;
   color: #555;
   font-weight: 600;
+}
+
+/* ===== 모바일 터치 컨트롤 ===== */
+.joy {
+  position: fixed;
+  left: 22px;
+  bottom: 26px;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  touch-action: none;
+  z-index: 20;
+}
+.joy-thumb {
+  position: absolute;
+  left: 35px;
+  top: 35px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transition: transform 0.04s linear;
+}
+.tbtns {
+  position: fixed;
+  right: 18px;
+  bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  z-index: 20;
+}
+.tbtn {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: none;
+  font-size: 15px;
+  font-weight: 800;
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  touch-action: manipulation;
+}
+.tbtn.chat {
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 30px;
+}
+.tbtn.veh {
+  background: linear-gradient(135deg, #6a5cff, #9a5cff);
+}
+.chatbar.mobile {
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  bottom: auto;
+  z-index: 30;
+}
+.chatbar.mobile input {
+  width: auto;
+  flex: 1;
+  font-size: 16px;
+}
+.chatlog.touch {
+  bottom: auto;
+  top: 58px;
+  left: 10px;
+  max-width: 75vw;
 }
 </style>

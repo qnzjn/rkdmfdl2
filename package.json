@@ -7,6 +7,7 @@
     "dev": "vite",
     "server": "node server.js",
     "start": "concurrently -k -n SERVER,WEB -c blue,green \"node server.js\" \"vite\"",
+    "auto": "node auto-deploy.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

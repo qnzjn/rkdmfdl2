@@ -197,6 +197,17 @@ h1 {
   color: #555;
   font-weight: 600;
 }
+.cell canvas {
+  width: 100%;
+  height: auto;
+  max-width: 80px;
+}
+@media (max-width: 430px) {
+  .card { padding: 22px 16px 18px; border-radius: 20px; }
+  h1 { font-size: 24px; }
+  .grid { gap: 6px; }
+  .cell { padding: 5px 1px 3px; }
+}
 .enter {
   width: 100%;
   margin-top: 18px;
