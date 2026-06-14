@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, reactive, computed, nextTick } from 'vue'
 import { state, sendMove, sendChat, sendMount, sendDismount } from '../net.js'
 import { charById, drawCharacter, roundRect } from '../characters.js'
 import { VEHICLES, drawVehicle } from '../vehicles.js'
@@ -22,37 +22,44 @@ const vehicleHint = ref('')
 // --- touch / mobile ---
 const isTouch = ref(false)
 const mobileChatOpen = ref(false)
-const joyBaseRef = ref()
-const joyThumbRef = ref()
-const joy = { active: false, x: 0, y: 0, r: 45 }
+// 플로팅 조이스틱: 화면 아무 곳이나 누른 지점에 생김
+const joy = reactive({ active: false, x: 0, y: 0, baseX: 0, baseY: 0, tx: 0, ty: 0, r: 56, id: null })
 
 const vehBtnLabel = computed(() => {
   const me = state.players[state.myId]
-  return me && me.vehicle ? '내리기' : '🛴 타기'
+  return me && me.vehicle ? '⬇ 내리기' : '🛴 타기'
+})
+const vehReady = computed(() => {
+  const me = state.players[state.myId]
+  if (!me) return false
+  return !!me.vehicle || !!nearestVehicleId(me)
 })
 
 function joyStart(e) {
+  if (joy.active) return
+  const t = e.changedTouches[0]
+  joy.id = t.identifier
   joy.active = true
-  joyMove(e)
+  joy.baseX = t.clientX; joy.baseY = t.clientY
+  joy.tx = 0; joy.ty = 0; joy.x = 0; joy.y = 0
 }
 function joyMove(e) {
-  if (!joy.active || !joyBaseRef.value) return
-  const t = e.changedTouches ? e.changedTouches[0] : e
-  const rect = joyBaseRef.value.getBoundingClientRect()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  let dx = t.clientX - cx
-  let dy = t.clientY - cy
-  const dist = Math.hypot(dx, dy)
-  if (dist > joy.r) { dx = (dx / dist) * joy.r; dy = (dy / dist) * joy.r }
-  joy.x = dx / joy.r
-  joy.y = dy / joy.r
-  if (joyThumbRef.value) joyThumbRef.value.style.transform = `translate(${dx}px, ${dy}px)`
+  if (!joy.active) return
+  let t = null
+  for (const ct of e.changedTouches) if (ct.identifier === joy.id) t = ct
+  if (!t) return
+  let dx = t.clientX - joy.baseX
+  let dy = t.clientY - joy.baseY
+  const d = Math.hypot(dx, dy)
+  if (d > joy.r) { dx = (dx / d) * joy.r; dy = (dy / d) * joy.r }
+  joy.tx = dx; joy.ty = dy
+  joy.x = dx / joy.r; joy.y = dy / joy.r
 }
-function joyEnd() {
-  joy.active = false
-  joy.x = 0; joy.y = 0
-  if (joyThumbRef.value) joyThumbRef.value.style.transform = 'translate(0,0)'
+function joyEnd(e) {
+  let mine = false
+  for (const ct of e.changedTouches) if (ct.identifier === joy.id) mine = true
+  if (!mine) return
+  joy.active = false; joy.x = 0; joy.y = 0; joy.id = null
 }
 function openMobileChat() {
   mobileChatOpen.value = !mobileChatOpen.value
@@ -375,18 +382,25 @@ function drawBubble(ctx, cx, bottomY, text) {
     <!-- 모바일 터치 컨트롤 -->
     <template v-if="isTouch">
       <div
-        class="joy"
-        ref="joyBaseRef"
+        class="touch-move-zone"
         @touchstart.prevent="joyStart"
         @touchmove.prevent="joyMove"
         @touchend.prevent="joyEnd"
         @touchcancel.prevent="joyEnd"
+      ></div>
+      <div
+        v-if="joy.active"
+        class="joy-float"
+        :style="{ left: joy.baseX + 'px', top: joy.baseY + 'px' }"
       >
-        <div class="joy-thumb" ref="joyThumbRef"></div>
+        <div class="joy-ring"></div>
+        <div class="joy-stick" :style="{ transform: `translate(${joy.tx}px, ${joy.ty}px)` }"></div>
       </div>
       <div class="tbtns">
         <button class="tbtn chat" @click="openMobileChat">💬</button>
-        <button class="tbtn veh" @click="toggleVehicle">{{ vehBtnLabel }}</button>
+        <button class="tbtn veh" :class="{ ready: vehReady }" @click="toggleVehicle">
+          {{ vehBtnLabel }}
+        </button>
       </div>
     </template>
 
@@ -505,42 +519,51 @@ function drawBubble(ctx, cx, bottomY, text) {
 }
 
 /* ===== 모바일 터치 컨트롤 ===== */
-.joy {
+.touch-move-zone {
   position: fixed;
-  left: 22px;
-  bottom: 26px;
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  border: 2px solid rgba(255, 255, 255, 0.45);
+  inset: 0;
+  z-index: 10;
   touch-action: none;
-  z-index: 20;
 }
-.joy-thumb {
-  position: absolute;
-  left: 35px;
-  top: 35px;
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.75);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+.joy-float {
+  position: fixed;
+  z-index: 15;
+  width: 0;
+  height: 0;
   pointer-events: none;
-  transition: transform 0.04s linear;
+}
+.joy-ring {
+  position: absolute;
+  left: -62px;
+  top: -62px;
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  border: 2px solid rgba(255, 255, 255, 0.55);
+}
+.joy-stick {
+  position: absolute;
+  left: -29px;
+  top: -29px;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 .tbtns {
   position: fixed;
-  right: 18px;
-  bottom: 30px;
+  right: 20px;
+  bottom: 34px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   z-index: 20;
 }
 .tbtn {
-  width: 74px;
-  height: 74px;
+  width: 82px;
+  height: 82px;
   border-radius: 50%;
   border: none;
   font-size: 15px;
@@ -551,10 +574,16 @@ function drawBubble(ctx, cx, bottomY, text) {
 }
 .tbtn.chat {
   background: rgba(0, 0, 0, 0.5);
-  font-size: 30px;
+  font-size: 32px;
 }
 .tbtn.veh {
   background: linear-gradient(135deg, #6a5cff, #9a5cff);
+  opacity: 0.5;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.tbtn.veh.ready {
+  opacity: 1;
+  transform: scale(1.06);
 }
 .chatbar.mobile {
   top: 10px;

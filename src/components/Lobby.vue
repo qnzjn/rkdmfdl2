@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { state, checkNick } from '../net.js'
 import { CHARACTERS } from '../characters.js'
 import CharacterPreview from './CharacterPreview.vue'
@@ -9,6 +9,34 @@ const emit = defineEmits(['enter'])
 const nick = ref('')
 const selected = ref(CHARACTERS[0].id)
 let timer = null
+
+// --- PWA 앱 설치 ---
+const installEvent = ref(null)
+const isIOS = ref(false)
+const isStandalone = ref(false)
+
+onMounted(() => {
+  isIOS.value = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  isStandalone.value =
+    window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault()
+    installEvent.value = e
+  })
+  window.addEventListener('appinstalled', () => { installEvent.value = null })
+})
+
+const showInstall = computed(() => !isStandalone.value && (installEvent.value || isIOS.value))
+
+async function installApp() {
+  if (installEvent.value) {
+    installEvent.value.prompt()
+    await installEvent.value.userChoice
+    installEvent.value = null
+  } else if (isIOS.value) {
+    alert('아이폰: 하단 공유 버튼(□↑) → "홈 화면에 추가" 를 누르면 앱으로 설치돼요.')
+  }
+}
 
 watch(nick, (v) => {
   const t = v.trim()
@@ -88,6 +116,11 @@ function enter() {
       <button class="enter" :disabled="!canEnter" @click="enter">
         광장 입장하기
       </button>
+
+      <button v-if="showInstall" class="install" @click="installApp">
+        📲 앱으로 설치하기
+      </button>
+
       <div class="online">현재 접속 {{ Object.keys(state.players).length }}명</div>
     </div>
   </div>
@@ -226,6 +259,19 @@ h1 {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.install {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  border: 2px solid #6a5cff;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #5a4fd0;
+  background: #fff;
+  cursor: pointer;
+}
+.install:active { background: #f0eeff; }
 .online {
   margin-top: 10px;
   font-size: 12px;
